@@ -38,6 +38,21 @@ _routes() {
   network_tools set_dns_servers ${DNS_SERVERS[@]}
 }
 
+_vpnc() {
+  _rsa_securid_codes
+  vpnc-disconnect
+  vpnc-connect "${VPNC_CONFIG_FILE:-default}" < "$generator_pipe" ||
+    { echo "Starting vpnc failed"; exit 1; }
+}
+
+_openvpn() {
+  pkill openvpn
+  openvpn \
+      --cd "$OPENVPN_CONFIG_DIR" \
+      --config "$OPENVPN_CONFIG_FILE" --daemon ||
+    { echo "Starting openvpn failed"; exit 1; }
+}
+
 cable() {
   _routes enp0s25
 }
@@ -45,10 +60,15 @@ cable() {
 vpn() {
   network_tools set_dns_servers 8.8.8.8 8.8.4.4
 
-  _rsa_securid_codes
-  vpnc-disconnect
-  vpnc-connect "${VPN_CONFIG:-default}" < "$generator_pipe" ||
-    { echo "Starting VPNC failed"; exit 1; }
+  if  test -n "$OPENVPN_CONFIG_DIR" &&
+      test -n "$OPENVPN_CONFIG_FILE"; then
+    _openvpn
+  elif  test -n "$VPNC_CONFIG" &&
+        test -n "$TOKEN_PASSWORD" &&
+        test -n "$TOKEN_PIN"; then
+    _vpnc
+  fi
+
   _routes tun0
 }
 
