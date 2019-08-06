@@ -23,6 +23,9 @@ _log() {
   echo "$(date +"%F %T") -- $@"
 }
 
+# Test ping with single IP or domain name
+# Usage:  test_connection 1.2.3.4
+#         test_connection a.org
 test_connection() {
   local i=0
   until timeout 1 ping -q $1 -w 1 -c 1 &>/dev/null; do
@@ -32,9 +35,12 @@ test_connection() {
   done
 }
 
+# Test ping with list of IPs or domain names
+# Usage:  test_connection 1.2.3.4 5.6.7.8
+#         test_connection a.org b.org
 hash fping && test_connection() {
   local i=0
-  until [ "$(fping $@ -ar 1)" ]; do
+  until test -n "$(timeout 1 head -n 1 <(fping $@ -aqr 5))"; do
     (( $((++i)) > $retries )) && return 1
     _log "Failed ($@), Retry $i/$retries"
     sleep 1
@@ -62,7 +68,7 @@ while :; do
     network_tools set_dns_servers ${DNS_SERVERS[@]}
   elif ! test_connection ${DNS_SERVERS[@]}; then
     reset_connection
-  elif ! [ "$(host "$CONNECTION_TEST")" ]; then
+  elif ! host "$CONNECTION_TEST" > /dev/null; then
     network_tools set_dns_servers ${DNS_SERVERS[@]}
   else
     _log "Still alive! ($active_connection)"
