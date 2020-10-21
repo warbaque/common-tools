@@ -1,0 +1,75 @@
+#! /usr/bin/env bash
+
+common_tools="$(cd "${BASH_SOURCE[0]%/*}/../../.." && pwd -P)"
+helpers="${common_tools}/lib/helpers"
+configs="${common_tools}/configs"
+. "${helpers}/task-utils.bash"
+
+vpn_env="${configs}/vpn/vpn.env"
+test -f "${vpn_env}" && . "${vpn_env}"
+
+check-env() {
+  test ! -z "${!1}" \
+    && { echo "${1}=${!1}"; } \
+    || { echo "${1} is not set"; exit 1; }
+}
+
+check-env VPN_ENDPOINT
+check-env VPN_CA_PASSWORD
+check-env VPN_SSH_KEY_PUBLIC
+
+export VM_NETWORK=bridge=br0,model=virtio
+export VM_HOSTNAME=vpn
+export VM_SSH_KEY="${VPN_SSH_KEY_PUBLIC}"
+export VM_CPUS=2
+export VM_MEM=2048
+export VM_DISK_SIZE=3G
+export VM_EXTRA_CLOUD_CONFIG="$(cat << EOF
+write_files:
+  - path: /root/dyfi.sh
+    permissions: 0700
+    owner: root:root
+    encoding: b64
+    content: $(cat "${helpers}/dyfi.bash" | base64 -w 0)
+  - path: /root/dyfi.env
+    permissions: 0700
+    owner: root:root
+    encoding: b64
+    content: $(cat "${configs}/vpn/dyfi.env" | base64 -w 0)
+  - path: /etc/cron.d/dyfi
+    permissions: 0600
+    owner: root:root
+    content: |
+      * * * * * root /root/dyfi.sh ${VPN_ENDPOINT}
+EOF
+)"
+
+"${common_tools}/lib/vm/create"
+
+(
+  pr_task "Waiting ${VPN_ENDPOINT} to come online"
+  sp='⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏'
+  until timeout 1 ping -q "${VPN_ENDPOINT}" -w 1 -c 1 &>/dev/null; do
+    c=${sp:$((++i))%${#sp}:1}
+    printf "[${c}${c}${c}${c}]  $(_elapsed_time "${TASK_START_TIME}")\r"
+  done
+)
+
+(
+  pr_task "Setup Algo"
+  sudo chown root:root -R "${configs}/vpn/algo"
+  algo_args="-e provider=local
+                server_name=algo
+                ondemand_cellular=false
+                ondemand_wifi=false
+                dns_adblocking=true
+                ssh_tunneling=false
+                store_pki=true
+                server=${VPN_ENDPOINT}
+                endpoint=${VPN_ENDPOINT}
+                ssh_user=root
+                ca_password=${VPN_CA_PASSWORD}
+                ansible_ssh_private_key_file=/data/vpn.pem"
+  docker run --cap-drop=all -it -e "ALGO_ARGS=${algo_args}" -v "${configs}/vpn/algo:/data" trailofbits/algo:latest
+  sudo chown "$(id -u):$(id -g)" -R "${configs}/vpn/algo"
+)

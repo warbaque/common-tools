@@ -1,0 +1,126 @@
+#! /bin/bash
+
+helpers="${BASH_SOURCE[0]%/*}/../../lib/helpers"
+. "${helpers}/run-as-root.bash"
+. "${helpers}/task-utils.bash"
+
+# ubuntu=https://cloud-images.ubuntu.com/focal/current
+# image=focal-server-cloudimg-amd64-disk-kvm.img
+# variant="ubuntu20.04"
+
+location="${VM_LOCATION:-https://cloud-images.ubuntu.com/bionic/current/}"
+image="${VM_IMAGE:-bionic-server-cloudimg-amd64.img}"
+variant="${VM_VARIANT:-ubuntu18.04}"
+
+network="${VM_NETWORK:-network=default,model=virtio}"
+
+hostname="${VM_HOSTNAME:-${1}}"
+ssh_key="$(cat "${VM_SSH_KEY:-${2}}")"
+workdir=/var/lib/libvirt/images/${hostname}
+cpus="${VM_CPUS:-2}"
+mem="${VM_MEM:-2048}"
+disk_size="${VM_DISK_SIZE}"
+disk=${hostname}.qcow2
+user_data=user-data
+meta_data=meta-data
+ci_iso=${hostname}-cidata.iso
+extra_cloud_config="${VM_EXTRA_CLOUD_CONFIG}"
+
+#==============================================================================
+#             CLEAN WORKDIR
+#==============================================================================
+
+rm -rf "${workdir}"
+mkdir -p "${workdir}"
+pushd "${workdir}" > /dev/null
+
+virsh dominfo "${hostname}" > /dev/null 2>&1 &&
+  { echo "${hostname} already exists. Destroy it first"; exit; }
+
+(
+  pr_task "Downloading base image"
+  test -f "../${image}" &&
+    { echo "Image exists"; exit; }
+  wget "${location}/${image}" -O "../${image}"
+)
+
+(
+  pr_task "Preparing disk (${disk})"
+  echo "------------------------------"
+  cp "../${image}" "${image}"
+  qemu-img info "${image}"
+  echo "------------------------------"
+  [ "${disk_size}" ] && qemu-img resize "${image}" "${disk_size}"
+  qemu-img convert "${image}" "${disk}"
+  qemu-img info "${disk}"
+  echo "------------------------------"
+  rm "${image}"
+)
+
+#==============================================================================
+#             USER DATA
+#==============================================================================
+
+cat << EOF > "${user_data}"
+#cloud-config
+
+preserve_hostname: False
+hostname: ${hostname}
+fqdn: ${hostname}.local
+
+runcmd:
+  - [ locale-gen, fi_FI.UTF-8 ]
+
+output:
+  all: ">> /var/log/cloud-init.log"
+
+disable_root: false
+ssh_svcname: ssh
+ssh_deletekeys: true
+ssh_genkeytypes: ['rsa', 'ecdsa']
+
+ssh_authorized_keys:
+  - ${ssh_key}
+
+${extra_cloud_config}
+EOF
+
+#==============================================================================
+#             META DATA
+#==============================================================================
+
+cat << EOF > "${meta_data}"
+instance-id: ${hostname}
+local-hostname: ${hostname}
+EOF
+
+#==============================================================================
+
+pr_run "Generating ISO for cloud-init"    \
+genisoimage                               \
+  -input-charset utf-8                    \
+  -output ${ci_iso}                       \
+  -volid cidata                           \
+  -joliet                                 \
+  -r ${user_data} ${meta_data}
+
+pr_run "Installing the domain and adjusting the configuration" \
+virt-install                              \
+  --import                                \
+  --name ${hostname}                      \
+  --os-type=linux                         \
+  --os-variant=${variant}                 \
+  --disk ${disk},format=qcow2,bus=virtio  \
+  --disk ${ci_iso},device=cdrom           \
+  --virt-type kvm                         \
+  --vcpus ${cpus}                         \
+  --ram ${mem}                            \
+  --network ${network}                    \
+  --graphics none                         \
+  --noautoconsole
+
+(
+  pr_task "Cleaning up cloud-init"
+  virsh change-media "${hostname}" sda --eject --config || true
+  rm -f "${user_data}" "${meta_data}" "${ci_iso}"
+)

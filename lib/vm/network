@@ -1,0 +1,19 @@
+#! /bin/bash
+
+helpers="${BASH_SOURCE[0]%/*}/../../lib/helpers"
+. "${helpers}/run-as-root.bash"
+. "${helpers}/task-utils.bash"
+
+hostname="${1}"
+
+(
+  set -o pipefail
+  pr_task "Waiting for ${hostname} network"
+  mac="$(virsh dumpxml ${hostname} | awk -F\' '/mac address/ {print $2}')" || exit 1
+  while :; do
+    ip="$(virsh net-dhcp-leases default | awk "/${mac}/"' {print $5}')"
+    test -z "${ip}" && sleep 1 || break
+  done
+  echo "mac  ${mac}"
+  echo "ip   ${ip%%/*}"
+)

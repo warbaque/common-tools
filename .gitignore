@@ -1,0 +1,6 @@
+configs/vpn/vpn.env
+configs/vpn/dyfi.env
+configs/vpn/algo/vpn.pem
+configs/vpn/algo/vpn.pub
+configs/vpn/algo/config.cfg
+configs/vpn/algo/configs

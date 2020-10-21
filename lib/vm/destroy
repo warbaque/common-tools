@@ -1,0 +1,18 @@
+#! /bin/bash
+
+helpers="${BASH_SOURCE[0]%/*}/../../lib/helpers"
+. "${helpers}/run-as-root.bash"
+. "${helpers}/task-utils.bash"
+
+hostname="${1}"
+workdir=/var/lib/libvirt/images/${hostname}
+
+(
+  pr_task "Destroying existing ${hostname} domain"
+  virsh dominfo "${hostname}" > /dev/null 2>&1 ||
+    { echo "${hostname} doesn't exist"; exit; }
+  virsh destroy "${hostname}"  || true
+  virsh undefine "${hostname}" || true
+)
+
+rm -rf "${workdir}"
